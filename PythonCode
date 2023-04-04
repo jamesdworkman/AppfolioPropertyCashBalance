@@ -1,0 +1,63 @@
+import pandas as pd
+import requests
+import time
+
+url = "https://clientID:clientSecret@(add your API domain here).appfolio.com/api/v1/reports/property_directory"
+r = requests.get(url, auth=('', '')) #add your auth username and password credentials here
+results = r.json()['results']
+df = pd.json_normalize(results)
+df2 = df.query('PropertyType=="HOA"')
+HOANames = df2[['PropertyId', 'PropertyName']]
+
+url = "https://clientID:clientSecret@(add your API domain here).appfolio.com/api/v1/reports/property_directory"
+r = requests.get(url, auth=('', ''))#add your auth username and password credentials here
+results = r.json()['results']
+df = pd.json_normalize(results)
+HOAs = df.query('PropertyType=="HOA"')['PropertyId']
+HOAList = HOAs.tolist()
+
+HOA1 = {}
+
+for HOA in HOAList:
+    url = "https://clientID:clientSecret@(add your API domain here).appfolio.com/api/v1/reports/trial_balance.json?properties="+str(HOA)+"&accounting_basis=accrual"
+
+    try:
+        req = requests.get(url, auth=('', ''))#add your auth username and password credentials here
+        results = req.json()['results']
+        df1 = pd.json_normalize(results)
+        df1['PropertyId'] = HOA
+        HOA1[HOA] = df1
+        time.sleep(3)
+
+    except requests.exceptions.JSONDecodeError:
+        print('The string does NOT contain valid JSON for'+str(HOA))
+
+combined1 = pd.concat(HOA1)
+combined1 = combined1.reset_index()
+del combined1["level_1"]
+
+df1 = pd.DataFrame(combined1)
+df2 = df1[df1['AccountName'].str.contains("1150|1170|2505|2510")]#add your GL accounts here, usually your cash and AP, but whatever you want to add to the calculation
+df3 = df2.replace(',','', regex=True)
+df3['EndingBalance']= df3['EndingBalance'].astype('float64')
+df4 = df3.groupby('PropertyId')['EndingBalance'].sum()
+newdf = HOANames.merge(df4, how='inner',left_on='PropertyId',right_on='PropertyId')
+HOANames = newdf[['PropertyName', 'EndingBalance']]
+df5 = HOANames.loc[HOANames['EndingBalance']>=250000.00]
+
+import win32com.client as win32
+outlook = win32.Dispatch('outlook.application')
+mail = outlook.CreateItem(0)
+mail.To = '; ;' #add your email or emails here separated by ;
+mail.Subject = 'HOAs with over $250k in GL Cash'
+mail.Body = 'Test body'
+mail.HTMLBody = """\
+<html>
+  <head></head>
+  <body>
+    {0}
+  </body>
+</html>
+""".format(df5.to_html()) #this field is optional
+
+mail.Send()
